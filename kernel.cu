@@ -1,82 +1,198 @@
-
+﻿
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-
+#include "../CPE800_CUDA_APSP/apsp_misc.h"
+#include "../CPE800_CUDA_APSP/apsp_parallel_1.h"
+#include "../CPE800_CUDA_APSP/apsp_misc.h"
 #include <stdio.h>
+#include <iostream>
+#include <chrono>
+#include <string>
+using namespace std::chrono;
+using namespace std;
+#define NN  999
+const int smp_executions = 8192;
+const int threads_per_block = 128;
+const int threads_per_smp = 2048;
 
-#include <mma.h>
+// derived 
+const int blocks_per_smp = threads_per_smp / threads_per_block;
+const dim3 blocks(smp_executions, blocks_per_smp);
+const dim3 threads(threads_per_block);
 
-using namespace nvcuda;
+__global__ void apsp_parallel_1_kernel(float* dev_dist, int N, int k) {
 
-__global__ void wmma_ker(half* a, half* b, float* c) {
-	// Declare the fragments
-	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::col_major> a_frag;
-	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+	int tid = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
+	int i, j;
+	float dist1, dist2, dist3;
 
-	// Initialize the output to zero
-	wmma::fill_fragment(c_frag, 0.0f);
+	if (tid < N * N) {
 
-	// Load the inputs
-	wmma::load_matrix_sync(a_frag, a, 16);
-	wmma::load_matrix_sync(b_frag, b, 16);
+		i = tid / N;
+		j = tid - i * N;
 
-	// Perform the matrix multiplication
-	wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+		dist1 = dev_dist[tid];
+		dist2 = dev_dist[i * N + k];
+		dist3 = dev_dist[k * N + j];
 
-	// Store the output
-	wmma::store_matrix_sync(c, c_frag, 16, wmma::mem_row_major);
-}
-// Create a cuDNN handle:
-checkCudnnErr(cudnnCreate(&handle_));
-
-// Create your tensor descriptors:
-checkCudnnErr( cudnnCreateTensorDescriptor( &cudnnIdesc ));
-checkCudnnErr( cudnnCreateFilterDescriptor( &cudnnFdesc ));
-checkCudnnErr( cudnnCreateTensorDescriptor( &cudnnOdesc ));
-checkCudnnErr( cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-
-// Set tensor dimensions as multiples of eight (only the input tensor is shown here):
-int dimA[] = {1, 8, 32, 32};
-int strideA[] = {8192, 1024, 32, 1};
-
-checkCudnnErr( cudnnSetTensorNdDescriptor(cudnnIdesc, getDataType(), 
-                                          convDim+2, dimA, strideA) );
-
-// Allocate and initialize tensors (again, only the input tensor is shown):
-checkCudaErr( cudaMalloc((void**)&(devPtrI), (insize) * sizeof(devPtrI[0]) ));
-hostI = (T_ELEM*)calloc (insize, sizeof(hostI[0]) );
-
-initImage(hostI, insize);
-
-checkCudaErr( cudaMemcpy(devPtrI, hostI, sizeof(hostI[0]) * insize, cudaMemcpyHostToDevice));
-
-// Set the compute data type (below as CUDNN_DATA_FLOAT):
-checkCudnnErr( cudnnSetConvolutionNdDescriptor(cudnnConvDesc,
-                                               convDim,
-                                               padA,
-                                               convstrideA,
-                                               dilationA,
-                                               CUDNN_CONVOLUTION,
-                                               CUDNN_DATA_FLOAT) );
-
-// Set the math type to allow cuDNN to use Tensor Cores:
-checkCudnnErr( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
-
-// Choose a supported algorithm:
-cudnnConvolutionFwdAlgo_t algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
-
-// Allocate your workspace:
-checkCudnnErr( cudnnGetConvolutionForwardWorkspaceSize(handle_, cudnnIdesc, 
-                                                       cudnnFdesc, cudnnConvDesc,
-                                                       cudnnOdesc, algo, &workSpaceSize) );
-
-if (workSpaceSize > 0) {
-   cudaMalloc(&workSpace, workSpaceSize);
+		if (dist1 > dist2 + dist3)
+			dev_dist[tid] = dist2 + dist3;
+	}
 }
 
-// Invoke the convolution:
-checkCudnnErr( cudnnConvolutionForward(handle_, (void*)(&alpha), cudnnIdesc, devPtrI,
-                                       cudnnFdesc, devPtrF, cudnnConvDesc, algo,
-                                       workSpace, workSpaceSize, (void*)(&beta),
-                                       cudnnOdesc, devPtrO) );
+// CUDA of Floyd Warshall algorithm
+void apsp_parallel_1(float** graph, float** dist, int N) {
+
+
+	float* dev_dist;
+	cudaMalloc((void**)&dev_dist, N * N * sizeof(float));
+
+	
+	for (int i = 0; i < N; i++)
+		cudaMemcpy(dev_dist + i * N, graph[i], N * sizeof(float),
+			cudaMemcpyHostToDevice);
+
+	
+	for (int k = 0; k < N; k++) {
+
+		// launch kernel
+		apsp_parallel_1_kernel << <blocks, threads >> > (dev_dist, N, k);
+		
+	}
+
+	// return results to dist matrix on host
+	for (int i = 0; i < N; i++)
+		cudaMemcpy(dist[i], dev_dist + i * N, N * sizeof(float),
+			cudaMemcpyDeviceToHost);
+}
+
+
+int main()
+{
+	int row = 1024* 1, col = 1024*1; // col and row
+	int INF = 9999;
+
+	cout << "Normal 65!!! ";
+	typedef struct
+	{
+		//结构体
+		int row, col;
+		//二维指针，目的是动态分配内存
+		float** matrix;
+	} Matrix;
+	cout << "Normal 73!!! ";
+	typedef struct
+	{
+		int row, col;
+		string** matrix;
+	} Matrix_string;
+
+	Matrix m;         //store value of path
+	Matrix_string m2; //store path
+	std::cout << "Normal 91!!!put in to memory "
+		<< "\n";
+
+	float** enterMatrix;
+	string** enterMatrix2;
+	enterMatrix = (float**)malloc(row * sizeof(float*));   // value of path
+	enterMatrix2 = (string**)malloc(row * sizeof(float*)); //store path
+	std::cout << "Normal 103!!! "
+		<< "\n";
+	for (int i = 0; i < row; i++) //put in to memory  //change size to *10
+	{
+		enterMatrix[i] = (float*)malloc(col * 10 * sizeof(float));
+		enterMatrix2[i] = (string*)malloc(col * 10 * sizeof(string)); // change sizeof(float) to string
+	}
+	std::cout << "Normal 109!!! set default value"
+		<< "\n";
+	int count_of_nuZero = 0;
+	for (int i = 0; i < row; i++) //set default value
+	{
+		for (int j = 0; j < col; j++)
+		{
+			enterMatrix[i][j] = INF;  //For path value ,default is 99999
+			//enterMatrix2[i][j] = " "; //for path, default is " "
+			if (i == j )
+			{
+				enterMatrix[i][j] = 0;
+			}
+			if (rand() % (NN + 1) / (float)(NN + 1)>0.9)
+			{
+				enterMatrix[i][j] = 1;
+				count_of_nuZero++;
+			}
+
+		}
+		
+	}
+	std::cout << "Normal 128!!! GPU start"
+		<< "\n";
+	//print_array(arr, n);
+	auto start = high_resolution_clock::now();	
+	apsp_parallel_1(enterMatrix, enterMatrix, row);
+	auto stop = high_resolution_clock::now();
+	//print_array(arr, n);
+	auto duration = duration_cast<microseconds>(stop - start);
+	cout << "apsp_parallel_1  1024     " << duration.count() << " ms   " << "\n";
+
+
+
+
+	float** M;
+	M = (float**)malloc(100 * sizeof(float*));
+	for (int i = 0; i < 100; i++) //put in to memory  //change size to *10
+	{
+		M[i] = (float*)malloc(col * 10 * sizeof(float));
+	}
+	count_of_nuZero = 0;
+	for (int i = 0; i < 10; i++) //set default value
+	{
+		for (int j = 0; j < 10; j++)
+		{
+			M[i][j] = 99;  //For path value ,default is 99999
+			//enterMatrix2[i][j] = " "; //for path, default is " "
+			if (rand() % 100>70)
+			{
+				M[i][j] = 1;
+				count_of_nuZero++;
+			}
+			if (i==j)
+			{
+				M[i][j] = 0;
+			}
+			std::cout << M[i][j] << " ";
+
+		}
+		std::cout 
+		<< "\n";
+	}
+	std::cout << count_of_nuZero
+		<< "\n";
+
+	std::cout<< "M complete" << "\n";
+	float** M2 = M;
+
+	apsp_parallel_1(M, M2, 10);
+
+	auto start2 = high_resolution_clock::now();
+	apsp_parallel_1(M, M2, 10);
+	auto stop2 = high_resolution_clock::now();
+	auto duration2 = duration_cast<microseconds>(stop2 - start2);
+	cout << "apsp_parallel_1  10     " << duration2.count() << " ms   "<<"\n";
+
+
+	for (int i = 0; i < 10; i++) //set default value
+	{
+		for (int j = 0; j < 10; j++)
+		{
+			std::cout << M[i][j]<<" ";
+		}
+		std::cout
+			<< "\n";
+	}
+
+
+
+
+	return 0;
+}
