@@ -6,9 +6,9 @@ using namespace std;
 
 typedef struct
 {
-    //结构体
+    //struct for matrix
     int row, col;
-    //二维指针，目的是动态分配内存
+    //use to allocate MEM dynamicly
     float **matrix;
 } Matrix;
 typedef struct
