@@ -80,9 +80,9 @@ int main(int args, char **argv)
     cout << "Normal 65!!! ";
     typedef struct
     {
-        //结构体
-        int row, col;
-        //二维指针，目的是动态分配内存
+        //struct for matrix
+    int row, col;
+    //use to allocate MEM dynamicly
         float **matrix;
     } Matrix;
     cout << "Normal 73!!! ";
